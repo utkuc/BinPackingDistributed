@@ -1,5 +1,6 @@
 from ortools.linear_solver import pywraplp
-
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.appName("SamilProgramı2").master("spark://192.168.0.10:7077").getOrCreate()
 
 def create_data_model():
     """Create the data for the example."""
@@ -11,7 +12,7 @@ def create_data_model():
     data['bin_capacity'] = 100
     return data
 
-
+#: 1.worker: 2 kutuya koydum %20si bos  3 kutuya koydum
 
 def main():
     data = create_data_model()
