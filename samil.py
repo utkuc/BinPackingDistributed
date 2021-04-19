@@ -2,6 +2,7 @@ import random
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType
 from pyspark.sql import Row
+from pyspark.sql.functions import rand
 
 spark = SparkSession.builder.appName("ddds").master("spark://172.20.64.1:7077").getOrCreate()
 data_schema = StructType([
@@ -26,10 +27,15 @@ for i in range(0, 10):
 data_df = spark.createDataFrame(data=data, schema=data_schema)
 bin_df = spark.createDataFrame(data=bins, schema=bin_schema)
 
+print(data_df.rdd.glom().collect())
+# Reshuffles the dataframe
+data_df = data_df.repartition(2)
+print(data_df.rdd.glom().collect())
+
+
 # To print each nodes data:
 # print(data_df.rdd.glom().collect())
 flag = True
-
 
 # How to sum values for each partition at each node: This is parallel operation
 # spark.filter -> BinId = null ise kutuya konmaya ihtiyacı var.
@@ -57,6 +63,7 @@ while (flag):
         bin_df = bin_df.union(new_bin_df)
 
     print(data_df.rdd.mapPartitionsWithIndex(show).collect())
+
     flag = False
 bin_df.show(truncate=False)
 #
