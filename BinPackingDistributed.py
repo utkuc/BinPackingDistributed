@@ -1,15 +1,16 @@
 import random
 from pyspark.sql import SparkSession
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, FloatType, DoubleType
-from pyspark.sql import Row
-from pyspark.sql.functions import rand, col, array_contains
-import json
+from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType
+from pyspark.sql.functions import  col
+import time
 
-spark = SparkSession.builder.appName("ddds").master("spark://192.168.0.10:7077").getOrCreate()
+spark = SparkSession.builder.appName("BinPackingDistributed ").master("spark://192.168.0.10:7077").getOrCreate()
 bin_capacity = 130
 bin_list = []
 bin_dic = dict(BinId=0, BinCapacity=bin_capacity, BinUtilization=0, BinItems=[])
 bin_list.append(bin_dic)
+diagnostic_time = []
+collect_diagnostic_time = []
 data_schema = StructType([
     StructField("ValueId", IntegerType(), False),
     StructField("Value", IntegerType(), True),
@@ -24,38 +25,16 @@ bin_schema = StructType([
 ])
 data = []
 bins = []
-# Create 1000 Items with value between (0-100) for packing
+# Create 100 Items with value between (0-130) for packing
 data_file = open("data.txt", "w")
-for i in range(0, 50000):
+for i in range(0, 100):
     value = (i, random.randint(1, 130), random.randint(1, 100000))
     data.append(value)
-
-with open('data.txt', 'w') as f:
-    for item in data:
-        f.write("%s,\n" % item[1])
 
 data_df = spark.createDataFrame(data=data, schema=data_schema)
 bin_df = spark.createDataFrame(data=bins, schema=bin_schema)
 
-#print(data_df.rdd.glom().collect())
-# Reshuffles the dataframe
-#data_df = data_df.repartition(2)
-#print(data_df.rdd.glom().collect())
-#salted_data_df = data_df.withColumn('Salt', col("Salt") + random.randint(1, 10000))
-#salted_data_df = salted_data_df.repartition(2)
-#print(salted_data_df.rdd.glom().collect())
 
-
-# To print each nodes data:
-# print(data_df.rdd.glom().collect())
-
-
-# How to sum values for each partition at each node: This is parallel operation
-# spark.filter -> BinId = null ise kutuya konmaya ihtiyacı var.
-# bin_df.where  ile şu andaki utilizationın altında kalan binlere bak:
-# bu binlerden: BinCapacity ve BinUtilization dan şu andaki kapasiteyi çıkar.
-# Eğer kapasite şu anda işlenen 'value' için yeterliyse, binid burdaki bine eşlenir.
-# Bunların hepsini yaparken yeni RDD ler yaratmak zorundayız, dataframe ve rdd immutable veri yapıları.
 def show(index, iterator):
     for row in iterator:
         added_to_bin = False
@@ -85,44 +64,44 @@ def show(index, iterator):
     yield bin_list
 
 
-# TODO: Runs for 1 time. We need to determine when its enough.
 flag = True
 optimization1 = False
 utilization_threshold = 0.90
 utilization_reduce_multiplier = 0.05
 master_list = []
 work_df = data_df
-
+decided_item_value_ids = []
 while (flag):
-    # If there are no bins, create a new bin
-    # if len(bin_df.take(1)) == 0:
-    #     print("There are no bins, creating new bin...")
-    #     new_bin = [[0, 0, bin_capacity]]
-    #     new_bin_df = spark.createDataFrame(new_bin)
-    #     bin_df = bin_df.union(new_bin_df)
-    print("Working Threshold: " + str(utilization_threshold))
-    if utilization_threshold < 0:
+    print("Working on Threshold: " + str(utilization_threshold))
+    if utilization_threshold < 0:  # Stop when  utilization is less than 0
         flag = False
         break
     bin_list = []
     bin_dic = dict(BinId=0, BinCapacity=bin_capacity, BinUtilization=0, BinItems=[])
     bin_list.append(bin_dic)
-    bin_dic_list = work_df.rdd.mapPartitionsWithIndex(show).collect()
-    #print("Printing Bins:")
+    timer1 = time.perf_counter()
+    bin_dic_list = work_df.rdd.mapPartitionsWithIndex(show).collect()  # Call FirstFirst Algorithm for rdd
+    timer2 = time.perf_counter()
+    # print("Collect took: " + str(timer2-timer1))
+    collect_diagnostic_time.append(timer2 - timer1)  # Diagnostic Timer
+    #  Create a master_list for bins according to threshold
     for result_list in bin_dic_list:
         for bins in result_list:
-            #print(bins)
+            # print(bins)
             if bins["BinUtilization"] >= utilization_threshold:
                 master_list.append(bins)
-    #print("Printing Master Bin:")
-    #print(master_list)
-    decided_item_value_ids = []
-    for bins in master_list:
-        for items in bins["BinItems"]:
-            decided_item_value_ids.append(items["ValueId"])
-
+                for items in bins["BinItems"]:  # Keep already added value id's to list so we can filter them out later
+                    decided_item_value_ids.append(items["ValueId"])
+    timer3 = time.perf_counter()
+    # creating a new dataframe for other while loop iteration
     work_df = work_df.filter(work_df.ValueId.isin(decided_item_value_ids) == False)
-    if len(work_df.take(1)) == 0:
+    timer4 = time.perf_counter()
+    # print("Filter took: " + str(timer4-timer3))
+    diagnostic_time.append(timer4 - timer3) # Diagnostic Timer
+    #  Salting for smooth repartition
+    salted_work_df = work_df.withColumn('Salt', col("Salt") + random.randint(1, 10000))
+    work_df = salted_work_df.repartition(8)
+    if len(work_df.take(1)) == 0:  # If workers doesn't return any new bin, no need to continue for other thresholds.
         break
     utilization_threshold = utilization_threshold - utilization_reduce_multiplier
 
@@ -133,18 +112,28 @@ def functSum(index, iterator):
         sum += item.Value
     yield str(sum)
 
+# RESULTS OF ALGORITHM
 
-print("Result Bins:")
-print(master_list)
-print("Data's total weight: ")
+# print("Result Bins:")
+# print(master_list)
 weights = data_df.rdd.mapPartitionsWithIndex(functSum).collect()
-total_weight = int(weights[0]) + int(weights[1])
+total_weight = 0
+for items in weights:
+    total_weight += int(items)
+total_filter_time = 0
+for item in diagnostic_time:
+    total_filter_time += item
+total_collect_time = 0
+for item in collect_diagnostic_time:
+    total_collect_time += item
+
+
+# Printing out results
+
+print("Data's total weight: ")
+print(total_weight)
 print("Best possible if weights were unstacked : " + str(total_weight / bin_capacity))
-print("Total Number of Bins: " + str(len(master_list)))
-# Utilization Perc: %90
-# 0.aşama: Verileri workerlara eşit dagıt
-# 1.aşama: Her worker Best Fit ile bütün verileri kutulara koy.
-# 2.aşama: Workerlar %90 utilization altında olan kutuları parçalar, mastera geri yollar.
-# 3.aşama: Shuffle at master.(transport)
-# 4.aşama: Repeat 0-3 , gönderilen veriyle gelen veri eşit olana kadar.
-# 5.aşama: hala veri varsa, utilizationı düşür. Repeat 0-4 thx
+print("Total Number of Bins used: " + str(len(master_list)))
+print("Total time waited for Filtering: " + str(total_filter_time))
+print("Total time waited for Collecting: " + str(total_collect_time))
+

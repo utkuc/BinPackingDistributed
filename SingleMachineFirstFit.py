@@ -1,3 +1,5 @@
+""" Credit to : https://stackoverflow.com/a/7392364 """
+
 class Bin(object):
     """ Container for items that keeps a running sum """
     def __init__(self):

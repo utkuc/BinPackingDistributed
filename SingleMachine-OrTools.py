@@ -1,3 +1,6 @@
+""" Credits to : https://developers.google.com/optimization/bin/bin_packing  """
+
+
 from ortools.linear_solver import pywraplp
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.appName("SamilProgramı2").master("spark://192.168.0.10:7077").getOrCreate()
