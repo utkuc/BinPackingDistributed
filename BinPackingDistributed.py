@@ -1,7 +1,7 @@
 import random
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, IntegerType, DoubleType
-from pyspark.sql.functions import  col
+from pyspark.sql.functions import col
 import time
 
 spark = SparkSession.builder.appName("BinPackingDistributed ").master("spark://192.168.0.10:7077").getOrCreate()
